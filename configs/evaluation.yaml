@@ -1,0 +1,16 @@
+model:
+  name: Qwen/Qwen2.5-7B-Instruct
+  revision: null
+
+evaluation:
+  split: test
+  max_examples: 3
+  seed: 42
+
+generation:
+  max_new_tokens: 256
+  do_sample: false
+  temperature: 0.0
+
+output:
+  directory: outputs/evaluation

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import platform
 import time
 from pathlib import Path
 
 import torch
+import transformers
 import yaml
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -15,7 +18,7 @@ NO_ISSUES = "No issues found."
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Evaluate the base ReviewPy model on the frozen test set."
+        description="Evaluate the base ReviewPy model."
     )
 
     parser.add_argument(
@@ -26,8 +29,11 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--dataset",
-        default="data/processed/test.jsonl",
-        help="Path to frozen test JSONL.",
+        default=None,
+        help=(
+            "Optional dataset override. If omitted, the dataset is selected "
+            "from evaluation.split."
+        ),
     )
 
     return parser.parse_args()
@@ -46,6 +52,16 @@ def load_jsonl(path: Path) -> list[dict]:
             records.append(json.loads(line))
 
     return records
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+
+    return digest.hexdigest()
 
 
 def normalize_output(text: str) -> str:
@@ -86,12 +102,15 @@ def generate_review(
 
     start = time.perf_counter()
 
+    generation_kwargs = {
+        "max_new_tokens": generation_config["max_new_tokens"],
+        "do_sample": generation_config["do_sample"],
+    }
+
     with torch.no_grad():
         output_ids = model.generate(
             **inputs,
-            max_new_tokens=generation_config["max_new_tokens"],
-            do_sample=generation_config["do_sample"],
-            temperature=generation_config["temperature"],
+            **generation_kwargs,
         )
 
     elapsed = time.perf_counter() - start
@@ -113,13 +132,21 @@ def compute_metrics(results: list[dict]) -> dict:
     total = len(results)
 
     exact_matches = 0
+    positive_exact_matches = 0
+    negative_exact_matches = 0
+
+    positive_examples = 0
+    negative_examples = 0
+
+    predicted_comments = 0
+    predicted_no_issue = 0
+
     correct_no_issue_decision = 0
 
-    true_positive = 0
-    false_positive = 0
-    false_negative = 0
+    true_positive_no_issue = 0
+    false_positive_no_issue = 0
+    false_negative_no_issue = 0
 
-    generated_comments = 0
     total_output_chars = 0
     total_latency = 0.0
 
@@ -127,41 +154,58 @@ def compute_metrics(results: list[dict]) -> dict:
         prediction = result["prediction"]
         reference = result["reference"]
 
-        predicted_no_issue = is_no_issue(prediction)
+        prediction_no_issue = is_no_issue(prediction)
         reference_no_issue = is_no_issue(reference)
+
+        if reference_no_issue:
+            negative_examples += 1
+        else:
+            positive_examples += 1
+
+        if prediction_no_issue:
+            predicted_no_issue += 1
+        else:
+            predicted_comments += 1
 
         if prediction == reference:
             exact_matches += 1
 
-        if predicted_no_issue == reference_no_issue:
+            if reference_no_issue:
+                negative_exact_matches += 1
+            else:
+                positive_exact_matches += 1
+
+        if prediction_no_issue == reference_no_issue:
             correct_no_issue_decision += 1
 
-        if predicted_no_issue and reference_no_issue:
-            true_positive += 1
+        if prediction_no_issue and reference_no_issue:
+            true_positive_no_issue += 1
 
-        elif predicted_no_issue and not reference_no_issue:
-            false_positive += 1
+        elif prediction_no_issue and not reference_no_issue:
+            false_positive_no_issue += 1
 
-        elif not predicted_no_issue and reference_no_issue:
-            false_negative += 1
-
-        if not predicted_no_issue:
-            generated_comments += 1
+        elif not prediction_no_issue and reference_no_issue:
+            false_negative_no_issue += 1
 
         total_output_chars += len(prediction)
         total_latency += result["latency_seconds"]
 
-    precision_denominator = true_positive + false_positive
-    recall_denominator = true_positive + false_negative
+    precision_denominator = (
+        true_positive_no_issue + false_positive_no_issue
+    )
+
+    recall_denominator = (
+        true_positive_no_issue + false_negative_no_issue
+    )
 
     precision = (
-        true_positive / precision_denominator
+        true_positive_no_issue / precision_denominator
         if precision_denominator
         else 0.0
     )
 
     recall = (
-        true_positive / recall_denominator
+        true_positive_no_issue / recall_denominator
         if recall_denominator
         else 0.0
     )
@@ -174,35 +218,88 @@ def compute_metrics(results: list[dict]) -> dict:
 
     return {
         "examples": total,
-        "exact_match_accuracy": exact_matches / total if total else 0.0,
+        "positive_examples": positive_examples,
+        "negative_examples": negative_examples,
+        "predicted_comments": predicted_comments,
+        "predicted_no_issue": predicted_no_issue,
+        "exact_match_accuracy": (
+            exact_matches / total if total else 0.0
+        ),
+        "positive_exact_match_accuracy": (
+            positive_exact_matches / positive_examples
+            if positive_examples
+            else 0.0
+        ),
+        "negative_exact_match_accuracy": (
+            negative_exact_matches / negative_examples
+            if negative_examples
+            else 0.0
+        ),
         "no_issue_decision_accuracy": (
-            correct_no_issue_decision / total if total else 0.0
+            correct_no_issue_decision / total
+            if total
+            else 0.0
         ),
         "no_issue_precision": precision,
         "no_issue_recall": recall,
         "no_issue_f1": f1,
         "generated_comment_rate": (
-            generated_comments / total if total else 0.0
+            predicted_comments / total
+            if total
+            else 0.0
         ),
         "average_output_characters": (
-            total_output_chars / total if total else 0.0
+            total_output_chars / total
+            if total
+            else 0.0
         ),
         "average_latency_seconds": (
-            total_latency / total if total else 0.0
+            total_latency / total
+            if total
+            else 0.0
         ),
+    }
+
+
+def get_hardware_info() -> dict:
+    if torch.cuda.is_available():
+        gpu_name = torch.cuda.get_device_name(0)
+    else:
+        gpu_name = None
+
+    return {
+        "python_version": platform.python_version(),
+        "torch_version": torch.__version__,
+        "transformers_version": transformers.__version__,
+        "cuda_available": torch.cuda.is_available(),
+        "cuda_runtime": torch.version.cuda,
+        "gpu_name": gpu_name,
     }
 
 
 def main() -> None:
     args = parse_args()
 
-    config = load_config(
-        Path(args.config)
-    )
+    config_path = Path(args.config)
+    config = load_config(config_path)
 
-    records = load_jsonl(
-        Path(args.dataset)
-    )
+    split = config["evaluation"]["split"]
+
+    if args.dataset is not None:
+        dataset_path = Path(args.dataset)
+    else:
+        dataset_path = Path(
+            f"data/processed/{split}.jsonl"
+        )
+
+    if not dataset_path.exists():
+        raise FileNotFoundError(
+            f"Dataset not found: {dataset_path}"
+        )
+
+    dataset_sha256 = sha256_file(dataset_path)
+
+    records = load_jsonl(dataset_path)
 
     max_examples = config["evaluation"].get(
         "max_examples"
@@ -212,20 +309,27 @@ def main() -> None:
         records = records[:max_examples]
 
     model_name = config["model"]["name"]
+    model_revision = config["model"]["revision"]
 
     print(f"Model: {model_name}")
+    print(f"Revision: {model_revision}")
+    print(f"Split: {split}")
+    print(f"Dataset: {dataset_path}")
+    print(f"Dataset SHA-256: {dataset_sha256}")
     print(f"Examples: {len(records):,}")
 
     print("\nLoading tokenizer...")
 
     tokenizer = AutoTokenizer.from_pretrained(
-        model_name
+        model_name,
+        revision=model_revision,
     )
 
     print("Loading model...")
 
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
+        revision=model_revision,
         torch_dtype="auto",
         device_map="auto",
     )
@@ -262,9 +366,31 @@ def main() -> None:
             f"{prediction[:100]}"
         )
 
-    metrics = compute_metrics(
-        results
-    )
+    task_metrics = compute_metrics(results)
+
+    metadata = {
+        "model": {
+            "name": model_name,
+            "revision": model_revision,
+        },
+        "evaluation": {
+            "split": split,
+            "max_examples": max_examples,
+            "seed": config["evaluation"].get("seed"),
+            "dataset_path": str(dataset_path),
+            "dataset_sha256": dataset_sha256,
+        },
+        "generation": {
+            "max_new_tokens": config["generation"]["max_new_tokens"],
+            "do_sample": config["generation"]["do_sample"],
+        },
+        "environment": get_hardware_info(),
+    }
+
+    report = {
+        "metadata": metadata,
+        "metrics": task_metrics,
+    }
 
     output_directory = Path(
         config["output"]["directory"]
@@ -303,24 +429,40 @@ def main() -> None:
         encoding="utf-8",
     ) as file:
         json.dump(
-            metrics,
+            report,
             file,
             indent=2,
         )
 
     print("\n=== BASE MODEL METRICS ===")
 
-    for key, value in metrics.items():
+    for key, value in task_metrics.items():
         if isinstance(value, float):
             print(
-                f"{key:30} "
+                f"{key:35} "
                 f"{value:.4f}"
             )
         else:
             print(
-                f"{key:30} "
+                f"{key:35} "
                 f"{value}"
             )
+
+    print("\n=== REPRODUCIBILITY INFO ===")
+    print(f"Model revision:    {model_revision}")
+    print(f"Dataset SHA-256:   {dataset_sha256}")
+    print(
+        f"GPU:               "
+        f"{metadata['environment']['gpu_name']}"
+    )
+    print(
+        f"PyTorch:           "
+        f"{metadata['environment']['torch_version']}"
+    )
+    print(
+        f"Transformers:      "
+        f"{metadata['environment']['transformers_version']}"
+    )
 
     print(
         f"\nPredictions: {predictions_path}"

@@ -3,8 +3,8 @@ model:
   revision: a09a35458c702b33eeacc393d103063234e8bc28
 
 evaluation:
-  split: validation
-  max_examples: 3
+  split: test
+  max_examples: null
   seed: 42
 
 generation:

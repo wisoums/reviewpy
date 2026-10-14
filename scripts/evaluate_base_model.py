@@ -12,7 +12,6 @@ import transformers
 import yaml
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-
 NO_ISSUES = "No issues found."
 
 

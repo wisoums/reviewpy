@@ -77,6 +77,17 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def seed_example(base_seed: int, zero_based_index: int) -> None:
+    # Reseed per example so sampled predictions do not depend on where
+    # an interrupted run resumed.
+    example_seed = base_seed + zero_based_index
+
+    torch.manual_seed(example_seed)
+
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(example_seed)
+
+
 def normalize_output(text: str) -> str:
     return text.strip().strip('"').strip()
 
@@ -307,6 +318,7 @@ def build_run_signature(
     dataset_path: Path,
     dataset_sha256: str,
     generation_config: dict,
+    seed: int,
 ) -> dict:
     return {
         "model_name": model_name,
@@ -315,6 +327,8 @@ def build_run_signature(
         "max_examples": max_examples,
         "dataset_path": str(dataset_path),
         "dataset_sha256": dataset_sha256,
+        "seed": seed,
+        "seed_strategy": "base_seed_plus_index",
         "generation": {
             "max_new_tokens": generation_config["max_new_tokens"],
             "do_sample": generation_config["do_sample"],
@@ -373,10 +387,6 @@ def main() -> None:
     generation_config = config["generation"]
 
     seed = config["evaluation"].get("seed", 42)
-    torch.manual_seed(seed)
-
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
 
     output_directory = Path(
         config["output"]["directory"]
@@ -410,6 +420,7 @@ def main() -> None:
         dataset_path=dataset_path,
         dataset_sha256=dataset_sha256,
         generation_config=generation_config,
+        seed=seed,
     )
 
     if args.restart:
@@ -516,6 +527,8 @@ def main() -> None:
                 ):
                     record = records[zero_based_index]
                     index = zero_based_index + 1
+
+                    seed_example(seed, zero_based_index)
 
                     prediction, latency = generate_review(
                         model,

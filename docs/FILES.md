@@ -12,6 +12,8 @@ Quick reference for the main files in the project.
 
 `data/processed/`: Contains the generated `train.jsonl`, `validation.jsonl`, and `test.jsonl` files. These files are produced locally by the preprocessing pipeline and are not committed to Git.
 
+`data/metadata/base_evaluation.json` : Stores the official base-model benchmark on the frozen test set. It records the pinned Qwen revision, test-set hash, environment, and baseline metrics used for later comparison with the fine-tuned model.
+
 ## Scripts
 
 `scripts/inspect_dataset.py`: A simple exploration script used to understand the original Hugging Face dataset. It shows available splits, Python example counts, and sample fields.

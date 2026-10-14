@@ -1,0 +1,35 @@
+{
+  "model": {
+    "name": "Qwen/Qwen2.5-7B-Instruct",
+    "revision": "a09a35458c702b33eeacc393d103063234e8bc28"
+  },
+  "evaluation": {
+    "split": "test",
+    "examples": 1605,
+    "positive_examples": 1029,
+    "negative_examples": 576,
+    "dataset_sha256": "c67cf84d1f6fd715b6b710cfbf85685d5f1315dd7370b2522e711f0b6dcb0953"
+  },
+  "generation": {
+    "max_new_tokens": 256,
+    "do_sample": false
+  },
+  "environment": {
+    "gpu": "NVIDIA A40",
+    "pytorch": "2.11.0+cu128",
+    "transformers": "5.19.0",
+    "cuda_runtime": "12.8"
+  },
+  "metrics": {
+    "exact_match_accuracy": 0.0181,
+    "positive_exact_match_accuracy": 0.0,
+    "negative_exact_match_accuracy": 0.0503,
+    "no_issue_decision_accuracy": 0.6417,
+    "no_issue_precision": 0.5088,
+    "no_issue_recall": 0.0503,
+    "no_issue_f1": 0.0916,
+    "generated_comment_rate": 0.9645,
+    "average_output_characters": 493.8561,
+    "average_latency_seconds": 3.3534
+  }
+}
